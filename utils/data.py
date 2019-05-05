@@ -34,7 +34,7 @@ def read(corpus_file):
 
 def gen_count_info(sentences, ngram=4):
     cnt_dict = {}
-    
+    total_cnt = 0
     for sent in sentences:
         N = len(sent)
         for i in range(N):
@@ -42,9 +42,10 @@ def gen_count_info(sentences, ngram=4):
                 end = i + n
                 if end > N:
                     continue
+                total_cnt += 1
                 token = sent[i:end]
                 if token not in cnt_dict:
-                    cnt_dict[token] = {}
+                    cnt_dict[token] = defaultdict(int)
                     cnt_dict[token]["cnt"] = 0
                     cnt_dict[token]["left"] = defaultdict(int)
                     cnt_dict[token]["right"] = defaultdict(int)
@@ -58,7 +59,7 @@ def gen_count_info(sentences, ngram=4):
                     cnt_dict[token]["right"]['<E>'] += 1
                 else:
                     cnt_dict[token]["right"][sent[end]] += 1
-    return cnt_dict
+    return cnt_dict, total_cnt
     
 def filter_by_freq(cnt_dict, min_freq=10):
     filtered_dict = {}
@@ -92,35 +93,64 @@ def cal_margin_entropy(cnt_dict):
         cnt_dict[k]['left'] = cal_entropy(v['left'])
         cnt_dict[k]['right'] = cal_entropy(v['right'])
 
-def cal_pmi(cnt_dict):
+def cal_ngram_pmi(cnt_dict, total_cnt):
+    for token, v in cnt_dict.items():
+        #only consider 2gram or larger
+        if len(token) > 1:
+            pmi_list = [total_cnt * v['cnt'] / (cnt_dict[token[:i + 1]]['cnt'] * cnt_dict[token[i + 1:]]['cnt'])  for i in range(len(token) - 1)]
+            score = min(pmi_list)
+
+            cnt_dict[token]['pmi'] = score
+    
+
+def filter_by_pmi(cnt_dict, min_pmi):
+    filtered_dict = {}
     for k, v in cnt_dict.items():
+        if v['pmi'] > min_pmi[len(k)]:
+            filtered_dict[k] = v
+    return filtered_dict
+
+def filter_by_entropy(cnt_dict, min_entropy=1.0):
+    filtered_dict = {}
+    for k, v in cnt_dict.items():
+        if v['left'] > min_entropy and v['right'] > min_entropy:
+            filtered_dict[k] = v
+    return filtered_dict
         
-# def filter_by_pmi(cnt_dict, min_pmi=1):
-#     for k, v in cnt_dict.items():
-#         if len(k) > 1:
-            
 def save(cnt_dict, output="../result/cnt_info.txt"):
     file = open(output, 'w', encoding="utf-8")
     for k, v in cnt_dict.items():
         file.write("{}\t{}\n".format(k, v))
+    return
 
 def test():
+    min_pmi={1:0, 2:5, 3:25, 4:125}
+    
     print("Starting to read!")
     sents = read("../data/corpus_finance.txt")
-    cnt_dict = gen_count_info(sents)
+    cnt_dict, total_cnt = gen_count_info(sents)
+    print("calculate pmi...")
+    cal_ngram_pmi(cnt_dict, total_cnt)
     
+    print("filtering by pmi...")
+    cnt_dict = filter_by_pmi(cnt_dict, min_pmi)
     print("filtering by frequence...")
     cnt_dict = filter_by_freq(cnt_dict)
     print("filtering by black list...")
     cnt_dict = filter_by_blacklist(cnt_dict)
     
-    print("find {} new tokens...".format(len(cnt_dict)))
+    
     file = open('../result/cnt_info.js', 'w')
     out_data = json.dumps(cnt_dict, ensure_ascii=False, indent=2)
     file.write(out_data)
     
     print("calculate margin entropy...")
     cal_margin_entropy(cnt_dict)
+    
+    print("filtering by entropy...")
+    cnt_dict = filter_by_entropy(cnt_dict)
+    
+    print("find {} new tokens...".format(len(cnt_dict)))
     file = open('../result/entropy_info.js', 'w')
     out_data = json.dumps(cnt_dict, ensure_ascii=False, indent=2)
     file.write(out_data)
