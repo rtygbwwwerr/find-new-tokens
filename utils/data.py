@@ -28,7 +28,9 @@ def read(corpus_file):
     for text in texts:
         segs = SPLIT_CHAR.findall(text.strip())
         for seg in segs:
-            sentences.append(re.sub(STOP_CHAR, "", seg))
+            sentence = re.sub(STOP_CHAR, "", seg)
+            if sentence != "":
+                sentences.append(sentence)
     return sentences
 
 
@@ -88,10 +90,27 @@ def cal_entropy(cnt_item):
     entropy = (-p * np.log2(p)).sum()
     return entropy
 
+
+def cal_nav(cnt_dict):
+    for k, v in cnt_dict.items():
+        lav = len(v['left'])
+        rav = len(v['right'])
+        av = min(lav, rav)
+        cnt_dict[k]['nav'] = (av * av) / v['cnt']
+        
 def cal_margin_entropy(cnt_dict):
     for k, v in cnt_dict.items():
         cnt_dict[k]['left'] = cal_entropy(v['left'])
         cnt_dict[k]['right'] = cal_entropy(v['right'])
+        
+def cal_ngram_pmi3(cnt_dict, total_cnt):
+    for token, v in cnt_dict.items():
+        #only consider 2gram or larger
+        if len(token) > 1:
+            pmi_list = [3 * np.log2(v['cnt']) + np.log2(total_cnt)  - np.log2(cnt_dict[token[:i + 1]]['cnt'] * cnt_dict[token[i + 1:]]['cnt'])  for i in range(len(token) - 1)]
+            score = min(pmi_list)
+
+            cnt_dict[token]['pmi'] = score 
 
 def cal_ngram_pmi(cnt_dict, total_cnt):
     for token, v in cnt_dict.items():
@@ -100,7 +119,7 @@ def cal_ngram_pmi(cnt_dict, total_cnt):
             pmi_list = [total_cnt * v['cnt'] / (cnt_dict[token[:i + 1]]['cnt'] * cnt_dict[token[i + 1:]]['cnt'])  for i in range(len(token) - 1)]
             score = min(pmi_list)
 
-            cnt_dict[token]['pmi'] = score
+            cnt_dict[token]['pmi'] = np.log2(score)
     
 
 def filter_by_pmi(cnt_dict, min_pmi):
@@ -110,13 +129,33 @@ def filter_by_pmi(cnt_dict, min_pmi):
             filtered_dict[k] = v
     return filtered_dict
 
-def filter_by_entropy(cnt_dict, min_entropy=1.0):
+def filter_by_entropy(cnt_dict, min_entropy=3.0):
     filtered_dict = {}
     for k, v in cnt_dict.items():
         if v['left'] > min_entropy and v['right'] > min_entropy:
             filtered_dict[k] = v
     return filtered_dict
-        
+
+def filter_by_nav(cnt_dict, min_nav=15):
+    filtered_dict = {}
+    for k, v in cnt_dict.items():
+        if v['nav'] > min_nav:
+            filtered_dict[k] = v
+    return filtered_dict
+
+def find_words(cnt_dict, sents, min_freq=10): #根据前述结果来找词语
+    words = defaultdict(int)
+    for sent in sents:
+        s = sent[0]
+        for i in range(len(sent) - 1):
+            if sent[i:i + 2] in cnt_dict: #如果比较“密切”则不断开
+                s += sent[i + 1]
+            else:
+                words[s] += 1 #否则断开，前述片段作为一个词来统计
+                s = sent[i + 1]
+    words = {i:j for i,j in words.items() if j >= min_freq} #最后再次根据频数过滤
+    return words
+
 def save(cnt_dict, output="../result/cnt_info.txt"):
     file = open(output, 'w', encoding="utf-8")
     for k, v in cnt_dict.items():
@@ -124,10 +163,12 @@ def save(cnt_dict, output="../result/cnt_info.txt"):
     return
 
 def test():
-    min_pmi={1:0, 2:5, 3:25, 4:125}
+#     min_pmi = {1:1, 2:5, 3:25, 4:125}
+    min_pmi = {1:np.log2(30), 2:np.log2(30), 3:np.log2(30), 4:np.log2(30)}
     
     print("Starting to read!")
     sents = read("../data/corpus_finance.txt")
+    print("read {} sentences...".format(len(sents)))
     cnt_dict, total_cnt = gen_count_info(sents)
     print("calculate pmi...")
     cal_ngram_pmi(cnt_dict, total_cnt)
@@ -140,18 +181,26 @@ def test():
     cnt_dict = filter_by_blacklist(cnt_dict)
     
     
-    file = open('../result/cnt_info.js', 'w')
+    file = open('../result/cnt_info_finance.js', 'w')
     out_data = json.dumps(cnt_dict, ensure_ascii=False, indent=2)
     file.write(out_data)
+    
+    print("calculate nav...")
+    cal_nav(cnt_dict)
     
     print("calculate margin entropy...")
     cal_margin_entropy(cnt_dict)
     
+    print("filtering by nav...")
+    cnt_dict = filter_by_nav(cnt_dict)
+    
     print("filtering by entropy...")
     cnt_dict = filter_by_entropy(cnt_dict)
     
+#     cnt_dict = find_words(cnt_dict, sents)
+    
     print("find {} new tokens...".format(len(cnt_dict)))
-    file = open('../result/entropy_info.js', 'w')
+    file = open('../result/entropy_info_finance.js', 'w')
     out_data = json.dumps(cnt_dict, ensure_ascii=False, indent=2)
     file.write(out_data)
     
